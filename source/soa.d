@@ -46,6 +46,7 @@ import std.traits : FieldNameTuple;
 struct SOA(T, size_t N)
 if (is(T == struct))
 {
+@nogc @safe pure nothrow:
     alias ElementType = T;
     alias Dispatcher = .Dispatcher!(T, N);
     alias DispatcherRange = .DispatcherRange!(T, N);
@@ -57,21 +58,21 @@ if (is(T == struct))
     }
 
     /// Returns a Dispatcher object to the pseudo-indexed `T` instance.
-    auto ref opIndex(size_t index)
+    inout(Dispatcher) opIndex(size_t index) inout
     {
-        return Dispatcher(&this, index);
+        return typeof(return)(&this, index);
     }
 
     /// Returns the full range of Dispatcher objects.
-    auto opIndex()
+    inout(DispatcherRange) opIndex() inout
     {
-        return DispatcherRange(&this, 0, N);
+        return typeof(return)(&this, 0, N);
     }
 
     /// Returns a range of Dispatcher objects.
-    auto opSlice(size_t beginIndex, size_t pastTheEndIndex)
+    inout(DispatcherRange) opSlice(size_t beginIndex, size_t pastTheEndIndex) inout
     {
-        return DispatcherRange(&this, beginIndex, pastTheEndIndex);
+        return typeof(return)(&this, beginIndex, pastTheEndIndex);
     }
 
     /// Length of the arrays.
@@ -91,6 +92,11 @@ private struct Dispatcher(T, size_t N)
 {
     SOA!(T, N)* soa;
     size_t index;
+
+    invariant
+    {
+        assert(index < N, "Dispatcher index is out of bounds");
+    }
 
     /// Get a reference to a field by name
     private auto ref getFieldRef(string field)() inout
@@ -184,9 +190,16 @@ private struct Dispatcher(T, size_t N)
  */
 private struct DispatcherRange(T, size_t N)
 {
+@nogc @safe pure nothrow:
     SOA!(T, N)* soa;
     size_t beginIndex;
     size_t pastTheEndIndex;
+
+    invariant
+    {
+        assert(beginIndex <= pastTheEndIndex);
+        assert(pastTheEndIndex <= N, "DispatcherRange pastTheEndIndex is out of bounds");
+    }
 
     @property size_t length() const
     {
@@ -200,25 +213,25 @@ private struct DispatcherRange(T, size_t N)
 
     @property bool empty() const
     {
-        return length == 0;
+        return beginIndex >= pastTheEndIndex;
     }
 
-    auto front()
+    auto front() inout
     {
         return this[beginIndex];
     }
 
-    auto back()
+    auto back() inout
     {
         return this[pastTheEndIndex - 1];
     }
 
-    Dispatcher!(T, N) opIndex(size_t index)
+    inout(Dispatcher!(T, N)) opIndex(size_t index) inout
     {
         return typeof(return)(soa, index);
     }
 
-    DispatcherRange opSlice(size_t beginIndex, size_t pastTheEndIndex)
+    inout(DispatcherRange) opSlice(size_t beginIndex, size_t pastTheEndIndex) inout
     {
         return typeof(return)(soa, this.beginIndex + beginIndex, this.beginIndex + pastTheEndIndex);
     }
@@ -233,7 +246,7 @@ private struct DispatcherRange(T, size_t N)
         pastTheEndIndex--;
     }
 
-    DispatcherRange save()
+    inout(DispatcherRange) save() inout
     {
         return this;
     }
@@ -257,6 +270,8 @@ unittest
     }
     
     alias Color16 = SOA!(Color, 16);
+    assert(Color16.sizeof == (Color[16]).sizeof);
+    assert(Color16.sizeof == 16 * Color.sizeof);
     assert(is(typeof(Color16.r) == float[16]));
     assert(is(typeof(Color16.g) == float[16]));
     assert(is(typeof(Color16.b) == float[16]));
@@ -324,9 +339,10 @@ unittest
     vectors[1] = Vector2(2, 2);
     assert(vectors[1] == Vector2(2, 2));
 
-    foreach(v; vectors[0 .. 2])
+    import std.stdio : writeln;
+    import std.range : retro;
+    foreach(v; vectors[0 .. 2].retro)
     {
-        import std.stdio;
         writeln("[", v.x, ", ", v.y, "]");
     }
 }
