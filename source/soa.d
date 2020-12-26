@@ -1,5 +1,7 @@
 module soa;
 
+import std.traits : FieldNameTuple;
+
 /**
  * Implement Struct Of Arrays from a struct type and array size.
  *
@@ -40,86 +42,16 @@ module soa;
 struct SOA(T, size_t N)
 if (is(T == struct))
 {
-    import std.traits : FieldNameTuple;
+    alias ElementType = T;
+    alias Dispatcher = .Dispatcher!(T, N);
+
+    // Generate one array for each field of `T` with the same name
     static foreach (i, field; FieldNameTuple!T)
     {
         mixin("typeof(T." ~ field ~ ")[" ~ N.stringof ~ "] " ~ field ~ " = T.init." ~ field ~ ";\n");
     }
 
-    private static struct Dispatcher
-    {
-        SOA* soa;
-        size_t index;
-
-        private auto ref getFieldRef(string field)() inout
-        {
-            return __traits(getMember, soa, field)[index];
-        }
-
-        auto ref opDispatch(string op)() inout
-        {
-            return getFieldRef!op;
-        }
-
-        void opAssign()(auto ref Dispatcher other)
-        {
-            if (other !is this)
-            {
-                static foreach (i, field; FieldNameTuple!T)
-                {
-                    getFieldRef!field = other.getFieldRef!field;
-                }
-            }
-        }
-
-        void opAssign()(auto ref T value)
-        {
-            static foreach (i, field; FieldNameTuple!T)
-            {
-                getFieldRef!field = __traits(getMember, value, field);
-            }
-        }
-
-        bool opEquals()(auto ref Dispatcher other) const
-        {
-            // identity: always truthy
-            if (other is this)
-            {
-                return true;
-            }
-            static foreach (i, field; FieldNameTuple!T)
-            {
-                if (other.getFieldRef!field != getFieldRef!field)
-                {
-                    return false;
-                }
-            }
-            return true;
-        }
-
-        bool opEquals()(auto ref const T value) const
-        {
-            static foreach (i, field; FieldNameTuple!T)
-            {
-                if (__traits(getMember, value, field) != getFieldRef!field)
-                {
-                    return false;
-                }
-            }
-            return true;
-        }
-
-        U opCast(U)() const
-        {
-            T value;
-            static foreach (i, field; FieldNameTuple!T)
-            {
-                __traits(getMember, value, field) = getFieldRef!field;
-            }
-            return cast(U) value;
-        }
-    }
-
+    /// Returns a Dispatcher object to the pseudo-indexed `T` instance.
     auto ref opIndex(size_t i)
     {
         return Dispatcher(&this, i);
@@ -127,6 +59,102 @@ if (is(T == struct))
 
     // TODO: implement Dispatcher range, opSlice
 }
+
+/**
+ * Proxy object that makes it possible to use a SOA just as if it were an AOS.
+ */
+private struct Dispatcher(T, size_t N)
+{
+    SOA!(T, N)* soa;
+    size_t index;
+
+    /// Get a reference to a field by name
+    private auto ref getFieldRef(string field)() inout
+    {
+        return __traits(getMember, soa, field)[index];
+    }
+    /// Returns whether two instances of dispatcher are the same.
+    private bool isSame(size_t M)(auto ref Dispatcher!(T, M) other) const
+    {
+        static if (N == M)
+        {
+            return other is this;
+        }
+        else
+        {
+            return false;
+        }
+    }
+
+    /// Get a reference to fields by name, dispatching to the right array at SOA instance.
+    auto ref opDispatch(string op)() inout
+    {
+        return getFieldRef!op;
+    }
+
+    /// Assign values from a Dispatcher to another, copying each field by name to the right array.
+    void opAssign(size_t M)(auto ref Dispatcher!(T, M) other)
+    {
+        if (!isSame(other))
+        {
+            static foreach (i, field; FieldNameTuple!T)
+            {
+                getFieldRef!field = other.getFieldRef!field;
+            }
+        }
+    }
+
+    /// Assign values from an instance of `T`, copying each field by name to the right array.
+    void opAssign()(auto ref T value)
+    {
+        static foreach (i, field; FieldNameTuple!T)
+        {
+            getFieldRef!field = __traits(getMember, value, field);
+        }
+    }
+
+    /// Compare for equality with another Dispatcher.
+    bool opEquals(size_t M)(auto ref Dispatcher!(T, M) other) const
+    {
+        if (isSame(other))
+        {
+            return true;
+        }
+        static foreach (i, field; FieldNameTuple!T)
+        {
+            if (other.getFieldRef!field != getFieldRef!field)
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /// Compare for equality with another Dispatcher.
+    bool opEquals()(auto ref const T value) const
+    {
+        static foreach (i, field; FieldNameTuple!T)
+        {
+            if (__traits(getMember, value, field) != getFieldRef!field)
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /// Pack `T` instance and cast to `U` if possible.
+    U opCast(U)() const
+    {
+        T value;
+        static foreach (i, field; FieldNameTuple!T)
+        {
+            __traits(getMember, value, field) = getFieldRef!field;
+        }
+        return cast(U) value;
+    }
+}
+
 
 unittest
 {
@@ -176,6 +204,12 @@ unittest
 
     Color c2 = cast(Color) colors[2];
     assert(c2 == Color.red);
+
+    alias Color8 = SOA!(Color, 8);
+    Color8 otherColors;
+    otherColors[0] = colors[2];
+    assert(otherColors[0] == Color.red);
+    assert(otherColors[0] == colors[3]);
 }
 
 unittest
