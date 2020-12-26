@@ -1,0 +1,17 @@
+{
+	"name": "soa",
+	"authors": [
+		"gilzoide"
+	],
+	"description": "Struct Of Arrays template compatible with betterC",
+	"license": "public license",
+	"configurations": [
+		{
+			"name": "library"
+		},
+		{
+			"name": "betterC",
+			"buildOptions": ["betterC"]
+		}
+	]
+}

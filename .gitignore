@@ -1,0 +1,6 @@
+.dub/
+build/
+/*soa*
+*.a
+*.so
+*.exe
