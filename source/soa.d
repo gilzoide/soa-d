@@ -24,11 +24,9 @@ import std.traits : FieldNameTuple;
  * Vector2_SOA structOfArrays;
  * ---
  *
- * Provides a dispatching object for member access, comparison,
- * assignment and others, allowing seamless substitution of
- * Array Of Structs and Struct of Arrays types.
- *
- * FIXME: implement dispatcher ranges, opSlice
+ * Provides a dispatching object for member access, comparison, assignment and
+ * others, and also provides a Random Access Finite Range of those, allowing
+ * seamless substitution of Array Of Structs and Struct Of Arrays types.
  *
  * ---
  * SOA!(Vector2, 100) vectors;
@@ -37,6 +35,12 @@ import std.traits : FieldNameTuple;
  * assert(vectors[0].x == vectors.x[0]);
  * vectors[1] = Vector2(2, 2);
  * assert(vectors[1] == Vector2(2, 2));
+ *
+ * foreach(v; vectors[0 .. 2])
+ * {
+ *     import std.stdio;
+ *     writeln(v.x, " ", v.y);
+ * }
  * ---
  */
 struct SOA(T, size_t N)
@@ -44,6 +48,7 @@ if (is(T == struct))
 {
     alias ElementType = T;
     alias Dispatcher = .Dispatcher!(T, N);
+    alias DispatcherRange = .DispatcherRange!(T, N);
 
     // Generate one array for each field of `T` with the same name
     static foreach (i, field; FieldNameTuple!T)
@@ -52,12 +57,31 @@ if (is(T == struct))
     }
 
     /// Returns a Dispatcher object to the pseudo-indexed `T` instance.
-    auto ref opIndex(size_t i)
+    auto ref opIndex(size_t index)
     {
-        return Dispatcher(&this, i);
+        return Dispatcher(&this, index);
     }
 
-    // TODO: implement Dispatcher range, opSlice
+    /// Returns the full range of Dispatcher objects.
+    auto opIndex()
+    {
+        return DispatcherRange(&this, 0, N);
+    }
+
+    /// Returns a range of Dispatcher objects.
+    auto opSlice(size_t beginIndex, size_t pastTheEndIndex)
+    {
+        return DispatcherRange(&this, beginIndex, pastTheEndIndex);
+    }
+
+    /// Length of the arrays.
+    enum length = N;
+
+    /// Length of the arrays.
+    @property size_t opDollar(size_t dim : 0)() const
+    {
+        return length;
+    }
 }
 
 /**
@@ -155,6 +179,66 @@ private struct Dispatcher(T, size_t N)
     }
 }
 
+/**
+ * Random Access Finite Range of Dispatcher objects.
+ */
+private struct DispatcherRange(T, size_t N)
+{
+    SOA!(T, N)* soa;
+    size_t beginIndex;
+    size_t pastTheEndIndex;
+
+    @property size_t length() const
+    {
+        return pastTheEndIndex - beginIndex;
+    }
+
+    @property size_t opDollar(size_t dim : 0)() const
+    {
+        return length;
+    }
+
+    @property bool empty() const
+    {
+        return length == 0;
+    }
+
+    auto front()
+    {
+        return this[beginIndex];
+    }
+
+    auto back()
+    {
+        return this[pastTheEndIndex - 1];
+    }
+
+    Dispatcher!(T, N) opIndex(size_t index)
+    {
+        return typeof(return)(soa, index);
+    }
+
+    DispatcherRange opSlice(size_t beginIndex, size_t pastTheEndIndex)
+    {
+        return typeof(return)(soa, this.beginIndex + beginIndex, this.beginIndex + pastTheEndIndex);
+    }
+
+    void popFront()
+    {
+        beginIndex++;
+    }
+
+    void popBack()
+    {
+        pastTheEndIndex--;
+    }
+
+    DispatcherRange save()
+    {
+        return this;
+    }
+}
+
 
 unittest
 {
@@ -214,6 +298,8 @@ unittest
 
 unittest
 {
+    import soa;
+
     // Transforms a struct definition like this
     struct Vector2 {
         float x = 0;
@@ -235,4 +321,10 @@ unittest
     assert(vectors[0].x == vectors.x[0]);
     vectors[1] = Vector2(2, 2);
     assert(vectors[1] == Vector2(2, 2));
+
+    foreach(v; vectors[0 .. 2])
+    {
+        import std.stdio;
+        writeln("[", v.x, ", ", v.y, "]");
+    }
 }
