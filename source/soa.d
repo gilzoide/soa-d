@@ -44,18 +44,19 @@ import std.traits : FieldNameTuple;
  * }
  * ---
  */
-struct SOA(T, size_t N)
+struct SOA(T, size_t N = 0)
 if (is(T == struct))
 {
-@nogc @safe pure nothrow:
     alias ElementType = T;
     alias Dispatcher = .Dispatcher!(T, N);
     alias DispatcherRange = .DispatcherRange!(T, N);
 
+    private enum usesStaticArrays = N > 0;
+
     // Generate one array for each field of `T` with the same name
     static foreach (i, field; FieldNameTuple!T)
     {
-        mixin("typeof(T." ~ field ~ ")[" ~ N.stringof ~ "] " ~ field ~ " = T.init." ~ field ~ ";\n");
+        mixin("typeof(T." ~ field ~ ")[" ~ (usesStaticArrays ? N.stringof : "") ~ "] " ~ field ~ (usesStaticArrays ? " = T.init." ~ field : "") ~ ";\n");
     }
 
     /// Construct SOA with initial elements copied from range.
@@ -65,32 +66,79 @@ if (is(T == struct))
         this[] = range;
     }
 
-    /// Returns a Dispatcher object to the pseudo-indexed `T` instance.
-    inout(Dispatcher) opIndex(size_t index) inout
+    @nogc @safe pure nothrow
     {
-        return typeof(return)(&this, index);
+        /// Returns a Dispatcher object to the pseudo-indexed `T` instance.
+        inout(Dispatcher) opIndex(size_t index) inout
+        {
+            return typeof(return)(&this, index);
+        }
+
+        /// Returns the full range of Dispatcher objects.
+        inout(DispatcherRange) opIndex() inout
+        {
+            return typeof(return)(&this, 0, length);
+        }
+
+        /// Returns a range of Dispatcher objects.
+        inout(DispatcherRange) opSlice(size_t beginIndex, size_t pastTheEndIndex) inout
+        {
+            return typeof(return)(&this, beginIndex, pastTheEndIndex);
+        }
     }
 
-    /// Returns the full range of Dispatcher objects.
-    inout(DispatcherRange) opIndex() inout
+    static if (usesStaticArrays)
     {
-        return typeof(return)(&this, 0, N);
+        /// Length of the arrays.
+        enum length = N;
+    }
+    else
+    {
+        /// Length of the arrays, assumed to be the same between all of them.
+        @property size_t length() const @nogc @safe pure nothrow
+        {
+            return __traits(getMember, this, FieldNameTuple!T[0]).length;
+        }
+
+        /// Concatenate a value.
+        void opOpAssign(string op : "~")(auto ref T value)
+        {
+            static foreach (i, field; FieldNameTuple!T)
+            {
+                __traits(getMember, this, field) ~= __traits(getMember, value, field);
+            }
+        }
+
+        /// Concatenate a value from Dispatcher.
+        void opOpAssign(string op : "~", size_t M)(auto ref Dispatcher!(T, M) dispatcher)
+        {
+            static foreach (i, field; FieldNameTuple!T)
+            {
+                __traits(getMember, this, field) ~= __traits(getMember, dispatcher, field);
+            }
+        }
+
+        /// Concatenate values from range.
+        void opOpAssign(string op : "~", R)(auto ref R range)
+        if (isInputRange!R)
+        {
+            foreach (v; range)
+            {
+                this ~= v;
+            }
+        }
+
+        invariant
+        {
+            size_t firstLength = __traits(getMember, this, FieldNameTuple!T[0]).length;
+            static foreach (i, field; FieldNameTuple!T[1 .. $])
+            {
+                assert(__traits(getMember, this, field).length == firstLength);
+            }
+        }
     }
 
-    /// Returns a range of Dispatcher objects.
-    inout(DispatcherRange) opSlice(size_t beginIndex, size_t pastTheEndIndex) inout
-    {
-        return typeof(return)(&this, beginIndex, pastTheEndIndex);
-    }
-
-    /// Length of the arrays.
-    enum length = N;
-
-    /// Length of the arrays.
-    @property size_t opDollar(size_t dim : 0)() const
-    {
-        return length;
-    }
+    alias opDollar = length;
 }
 
 /**
@@ -103,7 +151,7 @@ private struct Dispatcher(T, size_t N)
 
     invariant
     {
-        assert(index < N, "Dispatcher index is out of bounds");
+        assert(index < soa.length, "Dispatcher index is out of bounds");
     }
 
     /// Get a reference to a field by name
@@ -198,7 +246,6 @@ private struct Dispatcher(T, size_t N)
  */
 private struct DispatcherRange(T, size_t N)
 {
-@nogc @safe pure nothrow:
     SOA!(T, N)* soa;
     size_t beginIndex;
     size_t pastTheEndIndex;
@@ -206,63 +253,65 @@ private struct DispatcherRange(T, size_t N)
     invariant
     {
         assert(beginIndex <= pastTheEndIndex);
-        assert(pastTheEndIndex <= N, "DispatcherRange pastTheEndIndex is out of bounds");
+        assert(pastTheEndIndex <= soa.length, "DispatcherRange pastTheEndIndex is out of bounds");
     }
 
-    // Input Range
-    @property bool empty() const
+    @nogc @safe pure nothrow
     {
-        return beginIndex >= pastTheEndIndex;
-    }
+        // Input Range
+        @property bool empty() const
+        {
+            return beginIndex >= pastTheEndIndex;
+        }
 
-    auto front() inout
-    {
-        return this[0];
-    }
+        auto front() inout
+        {
+            return this[0];
+        }
 
-    void popFront()
-    {
-        beginIndex++;
-    }
+        void popFront()
+        {
+            beginIndex++;
+        }
 
-    // Forward Range
-    inout(DispatcherRange) save() inout
-    {
-        return this;
-    }
+        // Forward Range
+        inout(DispatcherRange) save() inout
+        {
+            return this;
+        }
 
-    // Bidirectional Range
-    auto back() inout
-    {
-        return this[$ - 1];
-    }
+        // Bidirectional Range
+        auto back() inout
+        {
+            return this[$ - 1];
+        }
 
-    void popBack()
-    {
-        pastTheEndIndex--;
-    }
+        void popBack()
+        {
+            pastTheEndIndex--;
+        }
 
-    // Random Access Finite Range
-    inout(Dispatcher!(T, N)) opIndex(size_t index) inout
-    {
-        return typeof(return)(soa, beginIndex + index);
-    }
+        // Random Access Finite Range
+        inout(Dispatcher!(T, N)) opIndex(size_t index) inout
+        {
+            return typeof(return)(soa, beginIndex + index);
+        }
 
-    inout(DispatcherRange) opSlice(size_t beginIndex, size_t pastTheEndIndex) inout
-    in { assert(beginIndex <= pastTheEndIndex); }
-    do
-    {
-        return typeof(return)(soa, this.beginIndex + beginIndex, this.beginIndex + pastTheEndIndex);
-    }
+        /// Returns a subrange.
+        inout(DispatcherRange) opSlice(size_t beginIndex, size_t pastTheEndIndex) inout
+        in { assert(beginIndex <= pastTheEndIndex); }
+        do
+        {
+            return typeof(return)(soa, this.beginIndex + beginIndex, this.beginIndex + pastTheEndIndex);
+        }
 
-    @property size_t length() const
-    {
-        return pastTheEndIndex - beginIndex;
-    }
+        /// Returns the range length.
+        @property size_t length() const
+        {
+            return pastTheEndIndex - beginIndex;
+        }
 
-    @property size_t opDollar(size_t dim : 0)() const
-    {
-        return length;
+        alias opDollar = length;
     }
 
     // Assignments
@@ -400,6 +449,26 @@ unittest
     otherColors[$-2 .. $] = otherColors[1 .. 3];
     assert(otherColors[$-2] == Color.blue);
     assert(otherColors[$-1] == Color.black);
+
+    alias SeveralColors = SOA!(Color);
+    SeveralColors several;
+    several.r = new float[5];
+    several.g = new float[5];
+    several.b = new float[5];
+    several.a = new float[5];
+
+    several[0] = Color.red;
+    assert(several[0] == Color.red);
+    assert(several[1] != Color.init);  // arrays were not initialized to Color.init values
+
+    import std.range : repeat;
+    several ~= repeat(Color.red, 3);
+    assert(several.length == 8);
+
+    destroy(several.a);
+    destroy(several.b);
+    destroy(several.g);
+    destroy(several.r);
 }
 
 unittest
@@ -424,16 +493,53 @@ unittest
     Vector2_SOA structOfArrays;
 
     SOA!(Vector2, 100) vectors;
-    vectors[0].x = 10;
+    // Assignment with object type
+    vectors[0] = Vector2(10, 0);
+    // Dispatcher object handles indexing the right arrays
     assert(vectors[0].x == 10);
+    assert(vectors[0].y == 0);
     assert(vectors[0].x == vectors.x[0]);
-    vectors[1] = Vector2(2, 2);
+    assert(vectors[0].y == vectors.y[0]);
+    // Slicing works, including assignment with single value or Range
+    vectors[1 .. 3] = Vector2(2, 2);
     assert(vectors[1] == Vector2(2, 2));
+    assert(vectors[2] == Vector2(2, 2));
 
+    // Also does other Range functionality
     import std.stdio : writeln;
     import std.range : retro;
     foreach(v; vectors[0 .. 2].retro)
     {
         writeln("[", v.x, ", ", v.y, "]");
     }
+
+    // It is possible to also use dynamic arrays, but they must be provided or
+    // grown manually. All arrays must have the same length (SOA with dynamic
+    // arrays have an `invariant` block with this condition)
+    SOA!(Vector2) dynamicVectors;
+    dynamicVectors.x = new float[5];
+    dynamicVectors.y = new float[5];
+    scope (exit)
+    {
+        // In this case arrays were created with `new´, so destroy them afterwards
+        destroy(dynamicVectors.y);
+        destroy(dynamicVectors.x);
+    }
+    assert(dynamicVectors.length == 5);
+
+    import std.algorithm : map;
+    import std.range : iota, enumerate;
+    dynamicVectors[] = iota(5).map!(x => Vector2(x, 0));
+    foreach (i, v; dynamicVectors[].enumerate)
+    {
+        assert(v == Vector2(i, 0));
+    }
+
+    // In-place concatenate operator is available, although not available in betterC
+    dynamicVectors ~= Vector2(5, 0);
+    foreach (i, v; dynamicVectors[].enumerate)
+    {
+        assert(v == Vector2(i, 0));
+    }
+    assert(dynamicVectors.length == 6);
 }
