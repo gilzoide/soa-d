@@ -1,5 +1,6 @@
 module soa;
 
+import std.range : enumerate, isInputRange, take;
 import std.traits : FieldNameTuple;
 
 /**
@@ -55,6 +56,13 @@ if (is(T == struct))
     static foreach (i, field; FieldNameTuple!T)
     {
         mixin("typeof(T." ~ field ~ ")[" ~ N.stringof ~ "] " ~ field ~ " = T.init." ~ field ~ ";\n");
+    }
+
+    /// Construct SOA with initial elements copied from range.
+    this(R)(auto ref R range)
+    if (isInputRange!R)
+    {
+        this[] = range;
     }
 
     /// Returns a Dispatcher object to the pseudo-indexed `T` instance.
@@ -201,6 +209,52 @@ private struct DispatcherRange(T, size_t N)
         assert(pastTheEndIndex <= N, "DispatcherRange pastTheEndIndex is out of bounds");
     }
 
+    // Input Range
+    @property bool empty() const
+    {
+        return beginIndex >= pastTheEndIndex;
+    }
+
+    auto front() inout
+    {
+        return this[0];
+    }
+
+    void popFront()
+    {
+        beginIndex++;
+    }
+
+    // Forward Range
+    inout(DispatcherRange) save() inout
+    {
+        return this;
+    }
+
+    // Bidirectional Range
+    auto back() inout
+    {
+        return this[$ - 1];
+    }
+
+    void popBack()
+    {
+        pastTheEndIndex--;
+    }
+
+    // Random Access Finite Range
+    inout(Dispatcher!(T, N)) opIndex(size_t index) inout
+    {
+        return typeof(return)(soa, beginIndex + index);
+    }
+
+    inout(DispatcherRange) opSlice(size_t beginIndex, size_t pastTheEndIndex) inout
+    in { assert(beginIndex <= pastTheEndIndex); }
+    do
+    {
+        return typeof(return)(soa, this.beginIndex + beginIndex, this.beginIndex + pastTheEndIndex);
+    }
+
     @property size_t length() const
     {
         return pastTheEndIndex - beginIndex;
@@ -211,44 +265,32 @@ private struct DispatcherRange(T, size_t N)
         return length;
     }
 
-    @property bool empty() const
+    // Assignments
+    void opAssign()(auto ref T value)
     {
-        return beginIndex >= pastTheEndIndex;
+        foreach (i; 0 .. length)
+        {
+            this[i] = value;
+        }
     }
 
-    auto front() inout
+    void opAssign(size_t M)(auto ref Dispatcher!(T, M) dispatcher)
     {
-        return this[beginIndex];
+        foreach (i; 0 .. length)
+        {
+            this[i] = dispatcher;
+        }
     }
 
-    auto back() inout
+    void opAssign(R)(auto ref R range)
+    if (isInputRange!R)
     {
-        return this[pastTheEndIndex - 1];
-    }
-
-    inout(Dispatcher!(T, N)) opIndex(size_t index) inout
-    {
-        return typeof(return)(soa, index);
-    }
-
-    inout(DispatcherRange) opSlice(size_t beginIndex, size_t pastTheEndIndex) inout
-    {
-        return typeof(return)(soa, this.beginIndex + beginIndex, this.beginIndex + pastTheEndIndex);
-    }
-
-    void popFront()
-    {
-        beginIndex++;
-    }
-
-    void popBack()
-    {
-        pastTheEndIndex--;
-    }
-
-    inout(DispatcherRange) save() inout
-    {
-        return this;
+        size_t i = 0;
+        foreach (v; range.take(length))
+        {
+            this[i] = v;
+            i++;
+        }
     }
 }
 
@@ -309,6 +351,55 @@ unittest
     otherColors[0] = colors[2];
     assert(otherColors[0] == Color.red);
     assert(otherColors[0] == colors[3]);
+
+    // construction from range
+    import std.algorithm : map;
+    import std.range : enumerate, iota;
+    auto alphaGradient = Color8(iota(42).map!(i => Color(1, 1, 1, i / 8f)));
+    foreach (i, c; alphaGradient[].enumerate)
+    {
+        assert(c.a == i / 8f);
+    }
+
+    alphaGradient = Color8(iota(5).map!(i => Color(1, 1, 1, i / 8f)));
+    foreach (i, c; alphaGradient[].enumerate)
+    {
+        if (i < 5)
+        {
+            assert(c.a == i / 8f);
+        }
+        else
+        {
+            assert(c == Color.init);
+        }
+    }
+
+    // assignment from range
+    otherColors = Color8([Color.red, Color.blue, Color.black]);
+    otherColors[3 .. $] = alphaGradient[];
+    assert(otherColors[0] == Color.red);
+    assert(otherColors[1] == Color.blue);
+    assert(otherColors[2] == Color.black);
+    assert(otherColors[3] == alphaGradient[0]);
+    assert(otherColors[4] == alphaGradient[1]);
+    assert(otherColors[5] == alphaGradient[2]);
+    assert(otherColors[6] == alphaGradient[3]);
+    assert(otherColors[7] == alphaGradient[4]);
+
+    // assignment from Color
+    otherColors[$-2 .. $] = Color.green;
+    assert(otherColors[$-2] == Color.green);
+    assert(otherColors[$-1] == Color.green);
+
+    // assignment from Dispatcher
+    otherColors[$-2 .. $] = otherColors[0];
+    assert(otherColors[$-2] == Color.red);
+    assert(otherColors[$-1] == Color.red);
+
+    // assignment from DispatcherRange
+    otherColors[$-2 .. $] = otherColors[1 .. 3];
+    assert(otherColors[$-2] == Color.blue);
+    assert(otherColors[$-1] == Color.black);
 }
 
 unittest
