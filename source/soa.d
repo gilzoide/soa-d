@@ -301,14 +301,16 @@ unittest
     import soa;
 
     // Transforms a struct definition like this
-    struct Vector2 {
+    struct Vector2
+    {
         float x = 0;
         float y = 0;
     }
     Vector2[100] arrayOfStructs;
     
     // To a struct definition like this
-    struct Vector2_SOA {
+    struct Vector2_SOA
+    {
         float[100] x = 0;
         float[100] y = 0;
     }
